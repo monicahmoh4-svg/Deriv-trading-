@@ -1,10 +1,13 @@
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const helmet = require('helmet');
 const { Server } = require('socket.io');
 
+const pool = require('./config/db');
 const { apiLimiter } = require('./middleware/rateLimiter');
 const authRoutes = require('./routes/auth');
 const derivRoutes = require('./routes/deriv');
@@ -33,7 +36,6 @@ const ALLOWED_ORIGINS = (process.env.FRONTEND_URL || 'http://localhost:5173')
 
 const corsOptions = {
   origin(origin, callback) {
-    // Allow non-browser requests (curl, server-to-server health checks) which send no Origin header.
     if (!origin) return callback(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
     logger.error('CORS rejected origin', origin);
@@ -82,10 +84,32 @@ const io = new Server(server, {
 });
 initSockets(io);
 
+// Runs migrations/001_init.sql against DATABASE_URL on every boot. Safe to repeat -
+// every statement in that file is CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
+// This exists specifically so you don't need direct psql/CLI access to the database
+// (e.g. when it lives in a different Render account) just to get the schema created.
+async function runMigrations() {
+  const migrationPath = path.join(__dirname, '..', 'migrations', '001_init.sql');
+  const sql = fs.readFileSync(migrationPath, 'utf8');
+  await pool.query(sql);
+  logger.info('database schema is up to date');
+}
+
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-  logger.info(`server listening on port ${PORT}`);
-});
+
+runMigrations()
+  .then(() => {
+    server.listen(PORT, () => {
+      logger.info(`server listening on port ${PORT}`);
+    });
+  })
+  .catch((err) => {
+    // Don't boot into a half-working state where every DB query will fail anyway -
+    // crash loudly so Render's logs show exactly why, and so it shows as a failed
+    // deploy instead of a silently broken one.
+    logger.error('startup migration failed - check DATABASE_URL', err);
+    process.exit(1);
+  });
 
 process.on('unhandledRejection', (reason) => {
   logger.error('unhandled rejection', reason);
