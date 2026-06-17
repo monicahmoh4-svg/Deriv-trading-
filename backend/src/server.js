@@ -23,12 +23,26 @@ app.use(cors({ origin: FRONTEND_URL, credentials: true }));
 app.use(express.json({ limit: '100kb' }));
 app.use(apiLimiter);
 
+app.get('/', (req, res) => {
+  res.json({
+    service: 'deriv-trading-backend',
+    status: 'running',
+    health: '/health',
+    api: ['/api/auth', '/api/deriv', '/api/trade', '/api/market'],
+  });
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/deriv', derivRoutes);
 app.use('/api/trade', tradeRoutes);
 app.use('/api/market', marketRoutes);
+
+// Anything else (unknown path) gets a clear JSON 404 instead of Express's plain-text default
+app.use((req, res) => {
+  res.status(404).json({ error: `No route for ${req.method} ${req.path}` });
+});
 
 // Centralized error handler - never leaks stack traces or secrets to clients
 app.use((err, req, res, next) => {
